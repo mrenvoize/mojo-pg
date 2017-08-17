@@ -1,6 +1,7 @@
 package Mojo::Pg::PubSub;
 use Mojo::Base 'Mojo::EventEmitter';
 
+use Mojo::IOLoop;
 use Mojo::JSON qw(from_json to_json);
 use Scalar::Util 'weaken';
 
@@ -22,6 +23,7 @@ sub notify { $_[0]->_db->notify(_json(@_)) and return $_[0] }
 sub reset {
   my $self = shift;
   delete @$self{qw(chans json pid)};
+  Mojo::IOLoop->remove(delete $self->{ping}) if $self->{ping};
   return unless my $db = delete $self->{db};
   ++$db->dbh->{private_mojo_no_reuse} and $db->_unwatch;
 }
@@ -37,11 +39,12 @@ sub unlisten {
 sub _db {
   my $self = shift;
 
-  return $self->{db} if $self->{db};
+  return $self->{db} if ($self->{db} && $self->{db}->ping);
 
   my $db = $self->{db} = $self->pg->db;
   weaken $db->{pg};
   weaken $self;
+  $self->{ping} ||= Mojo::IOLoop->recurring(60 => sub { $self->_db });
   $db->on(
     notification => sub {
       my ($db, $name, $pid, $payload) = @_;
