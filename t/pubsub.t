@@ -125,6 +125,43 @@ is_deeply \@test, [], 'no messages';
   is_deeply \@test, ['works too'], 'right messages';
 };
 
+# Reconnect while listening (inside loop)
+$pg = Mojo::Pg->new($ENV{TEST_ONLINE});
+@dbhs = @test = ();
+$pg->pubsub->on(reconnect => sub { push @dbhs, pop->dbh });
+$pg->pubsub->listen(pstest => sub { push @test, pop });
+ok $dbhs[0], 'database handle';
+is_deeply \@test, [], 'no messages';
+{
+  local $dbhs[0]{Warn} = 0;
+  $pg->pubsub->on(
+    reconnect => sub { shift->notify(pstest => 'works'); Mojo::IOLoop->stop });
+  Mojo::IOLoop->start;
+  $pg->db->query('select pg_terminate_backend(?)', $dbhs[0]{pg_pid});
+  ok $dbhs[1], 'database handle';
+  isnt $dbhs[0], $dbhs[1], 'different database handles';
+  is_deeply \@test, ['works'], 'right messages';
+};
+
+# Reconnect while not listening (inside loop)
+$pg = Mojo::Pg->new($ENV{TEST_ONLINE});
+@dbhs = @test = ();
+$pg->pubsub->on(reconnect => sub { push @dbhs, pop->dbh });
+$pg->pubsub->notify(pstest => 'fail');
+ok $dbhs[0], 'database handle';
+is_deeply \@test, [], 'no messages';
+{
+  local $dbhs[0]{Warn} = 0;
+  $pg->pubsub->on(reconnect => sub { Mojo::IOLoop->stop });
+  Mojo::IOLoop->start;
+  $pg->db->query('select pg_terminate_backend(?)', $dbhs[0]{pg_pid});
+  ok $dbhs[1], 'database handle';
+  isnt $dbhs[0], $dbhs[1], 'different database handles';
+  $pg->pubsub->listen(pstest => sub { push @test, pop });
+  $pg->pubsub->notify(pstest => 'works too');
+  is_deeply \@test, ['works too'], 'right messages';
+};
+
 # Reset
 $pg = Mojo::Pg->new($ENV{TEST_ONLINE});
 @dbhs = @test = ();
